@@ -1,0 +1,803 @@
+---
+title: "Prediction on test data"
+author: "Mark Wang and Paola Aleman"
+date: "9/30/2019"
+output: word_document
+editor_options:
+  chunk_Output_type: console
+Output: word_document
+---
+
+# Instructions
+This markdown file is used to make predictions based on the whole existing dataset, as well as the four best-performing algorithms identified on the existing dataset.  
+This markdown should be used along with the training markdown. Existing data shall be processed and models trained using the training markdown. Then this markdown file can be applied.  
+Note the models are label by "c1k". which stands for c -> colombia, 1 -> club 6101 and k -> kitchen trash bags.  
+It is necessary to change "c1k" whenever you're analyzing a different set of item and club. This way graphs and models are saved into folders with their specific name.  
+For easier substitution ctrl+f. In the first box type the name you want to substitute, for example "c1k". and on the second box include the prefix you want to substitute with, for example "c2k". Then click the last All option.  
+
+# Installing packages
+
+```{r Installing packages, include=FALSE, results = 'hide'}  
+# Install the packages just once. Afterwards you only need to load the libraries
+source("Code/Install Packages.R")
+
+``` 
+# Prepare data
+
+```{r prepare data}
+
+knitr::opts_knit$set(root.dir = normalizePath("C:/Users/mwang/Desktop/Forecast"))
+setwd("C:/Users/mwang/Desktop/Forecast")
+getwd()  
+len_dec<-1  #The frequency in which buyers make purchase decisions 
+len_inv<-17 #The time span from purchase to selling of an item 
+#Item, club and country we are analyzing 
+item <- "Kitchen Trash Bag"
+club <- 6101
+country <- "Colombia"
+load(paste0("Output/Countries/Colombia/", club, ".RData"))
+c1k_prediction<-data.frame(TransactionTime=(as.Date(c1k_week$TransactionTime[nrow(c1k_week)])+7*(1:(len_dec+len_inv))), quantity_avrg=NA)
+```
+
+# Identify seasons
+
+The periodogram function does not detect high frequency seasons accurately. To solve this problem, one of the built-in functions need to be modified.   
+Run the following line in r (which is included in this chunk of code): 
+trace(spec.pgram, edit=TRUE)
+Then change line 9 to:
+N <- N0 <- nrow(x) * 128
+Then click "save"
+The function is hence temporarily changed.  
+
+Similar to in the training markdown, the identification of seasons here is not completely automated. Personal judgement is still needed.  
+Firstly, 52.14, the number of weeks per year, is always included.  
+Secondly, only periods shorter than 52.14 should be included, and their length should be adjusted to its closest whole-month length. For example, if 13.02 is reported is a strong period by Fourier transformation, 12.53 (three months) should be the season used in analyses.  
+Thirdly, none period should be multiple of the other (otherwise Fourier regressor does not work).   Therefore, half-year period is changed from 26.07 to 25.07 weeks. We believe better ways to deal with this problem exist.  
+
+```{r iedntify seasons}
+trace(spec.pgram, edit=TRUE)
+p = periodogram(c1k_week$quantity_avrg)
+dd = data.frame(freq=p$freq, spec=p$spec)
+order = dd[order(-dd$spec),]
+
+order<-order[(1/order)<60,]
+(1/(order$freq))%>%head(10)
+
+season1<-25.07
+season2<-52.14
+season3<-12.53
+```
+
+# Creating time series
+
+```{r creating TS}
+
+t_log<-ts(log(c1k_week$quantity_avrg), frequency = 52.14, start = c(c1k_week$week_number_year[1], c1k_week$week_number[1]))  
+
+plot(t_log)
+
+decompose_log <- stl(t_log, s.window = 13, t.window = 13)
+plot(decompose_log)
+
+adjust_log<- t_log - decompose_log$time.series[,1] # deseasonalize data 
+
+outlier_free_log<- tsclean(adjust_log)
+trend_log<- decompose_log$time.series[, 2]
+detrend_ts_log <- outlier_free_log-(trend_log - trend_log[1]) #  corrected detrending part 
+
+plot(adjust_log)
+plot(outlier_free_log)
+autoplot(adjust_log)+autolayer(outlier_free_log)
+plot(detrend_ts_log)
+
+
+##Training Set: uni-variate methods
+  
+training_log<-ts(detrend_ts_log, frequency = 52.14, start = c(c1k_week$week_number_year[1], c1k_week$week_number[1])) 
+
+##future trend and seasonality, which will be added back:
+
+trend_fit_log <- auto.arima(trend_log)
+trend_for_log <- forecast(trend_fit_log, len_inv+len_dec)$mean
+retrend_log<-trend_for_log
+reseasonal_log<-forecast(decompose_log$time.series[,1], len_inv+len_dec)$mean
+
+##data visualization
+theme_ts <- theme(panel.border = element_rect(fill = NA, 
+                                              colour = "grey10"),
+                  panel.background = element_blank(),
+                  panel.grid.minor = element_line(colour = "grey85"),
+                  panel.grid.major = element_line(colour = "grey85"),
+                  panel.grid.major.x = element_line(colour = "grey85"),
+                  axis.text = element_text(size = 13, face = "bold"),
+                  axis.title = element_text(size = 15, face = "bold"),
+                  plot.title = element_text(size = 16, face = "bold"),
+                  strip.text = element_text(size = 16, face = "bold"),
+                  strip.background = element_rect(colour = "black"),
+                  legend.text = element_text(size = 15),
+                  legend.title = element_text(size = 16, face = "bold"),
+                  legend.background = element_rect(fill = "white"),
+                  legend.key = element_rect(fill = "white"))
+
+decomp_stl_log<- data.table(Quant = c(t_log, decompose_log$time.series[, 1], decompose_log$time.series[, 2]-decompose_log$time.series[, 2][1], detrend_ts_log),
+                            Date = rep(c1k_week$TransactionTime, ncol(decompose_log$time.series)+1),
+                            Type = factor(rep(c("log quantity", colnames(decompose_log$time.series)),
+                                              each = nrow(decompose_log$time.series)),
+                                          levels = c("log quantity", colnames(decompose_log$time.series))))
+
+ggplot(decomp_stl_log, aes(x = Date, y = Quant)) +
+  geom_line() + 
+  facet_grid(Type ~ ., scales = "free_y", switch = "y") +
+  labs(x = "Time", y = NULL,
+       title = "Time Series Decomposition by STL (log quantity)") +
+  theme_ts
+
+decomp_stl_training_log<- decomp_stl_log
+decomp_stl_training_log$set<-"training"
+
+decomp_stl_forecast_log<-data.table(Quant=c(rep(NA, len_dec+len_inv), reseasonal_log, retrend_log-trend_log[1], rep(NA, len_dec+len_inv)), 
+                                    Date = rep(c1k_prediction$TransactionTime, ncol(decompose_log$time.series)+1), 
+                                    Type = factor(rep(c("log quantity", colnames(decompose_log$time.series)),
+                                                      each = len_dec+len_inv),
+                                                  levels = c("log quantity", colnames(decompose_log$time.series))))
+decomp_stl_forecast_log$set<-"forecast"
+decomp_stl_combined_log<-rbind(decomp_stl_training_log, decomp_stl_forecast_log)
+
+ggplot(decomp_stl_combined_log, aes(x = Date, y = Quant, col=set)) +
+  geom_line() + 
+  facet_grid(Type ~ ., scales = "free_y", switch = "y") +
+  labs(x = "Time", y = NULL,
+       title = "Time Series Decomposition by STL (log quantity)") +
+  theme_ts
+
+```
+
+# Simple model: Average method
+
+```{r average method}
+Average_Method<-meanf(training_log, h = len_dec+len_inv)
+autoplot(training_log) +
+  autolayer(Average_Method,
+            series = "Average", PI = FALSE)+
+  ggtitle("test data: average method") +
+  xlab("Year") + ylab( paste(item, "\n logged, detrended and de-seasonalized"))+
+  guides(colour=guide_legend(title="Forecast"))
+c1k_prediction$Average_Method<-exp(Average_Method$mean+(retrend_log-trend_log[1])+reseasonal_log)
+```
+
+# Simple model: Naive method
+
+```{r naive method}
+Naive_Method<-naive(training_log, h = len_dec+len_inv)
+autoplot(training_log) +
+  autolayer(Naive_Method,
+            series = "Naive", PI = FALSE)+
+  ggtitle("test data: naive method") +
+  xlab("Year") + ylab( paste(item, "\n logged, detrended and de-seasonalized"))+
+  guides(colour=guide_legend(title="Forecast"))
+c1k_prediction$Naive_Method<-exp(Naive_Method$mean+(retrend_log-trend_log[1])+reseasonal_log)
+```
+
+# Simple model: Seasonal Naive method
+
+```{r seasonal naive method}
+Seasonal_Naive_Method<-snaive(training_log, h = len_dec+len_inv)
+autoplot(training_log) +
+  autolayer(Seasonal_Naive_Method,
+            series = "Naive", PI = FALSE)+
+  ggtitle("test data: naive method") +
+  xlab("Year") + ylab( paste(item, "\n logged, detrended and de-seasonalized"))+
+  guides(colour=guide_legend(title="Forecast"))
+c1k_prediction$Seasonal_Naive_Method<-exp(Seasonal_Naive_Method$mean+(retrend_log-trend_log[1])+reseasonal_log)
+```
+
+# Simple modeol: Drift method
+
+```{r drift method}
+# Drift method
+Drift_Method<-rwf(training_log, h = len_dec+len_inv, drift = TRUE)
+
+autoplot(training_log) +
+  autolayer(Drift_Method,
+            series = "Drift", PI = FALSE)+
+  ggtitle("test data: drift method") +
+  xlab("Year") + ylab( paste(item, "\n logged, detrended and de-seasonalized"))+
+  guides(colour=guide_legend(title="Forecast"))
+c1k_prediction$Drift_Method<-exp(Drift_Method$mean+(retrend_log-trend_log[1])+reseasonal_log)
+```
+
+# Arima: auto.arima
+
+```{r autoarima}
+Simple_Arima<- auto.arima(training_log)
+fc_Simple_Arima_1<- forecast(Simple_Arima, len_dec+len_inv, bootstrap = TRUE)
+
+autoplot(fc_Simple_Arima_1) +
+   xlab("Year") + ylab("Logged Quantity Sold of Kitchen Trash Bags")+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+cr_Simple_Arima_1<-checkresiduals(fc_Simple_Arima_1) 
+
+c1k_prediction$Simple_Arima_1<-exp(fc_Simple_Arima_1$mean+(retrend_log-trend_log[1])+reseasonal_log)
+
+```
+
+# ARIMA double season
+This section makes Arima predictions based on seasons 1 and 2
+
+```{r ARIMA double season}
+#this arima model uses fourier and the three seasonality periods obtained above.
+
+Arima_AIC <- auto.arima(training_log)
+bestfit <- list(aicc=Arima_AIC$aicc, i=0, j=0, Arima_Seasons1_2=Arima_AIC)
+
+fc_ARIMA_fourier<- forecast(Arima_AIC, h = len_dec+len_inv)
+autoplot(fc_ARIMA_fourier) +
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+for(i in 1:3) {
+  for (j in 1:3){
+    z1 <- fourier(ts(training_log, frequency= season1), K=i)
+    z2 <- fourier(ts(training_log, frequency= season2), K=j)
+    Arima_Seasons1_2 <- auto.arima(training_log, xreg=cbind(z1, z2), seasonal=F)
+    if(Arima_Seasons1_2$aicc < bestfit$aicc) {
+      bestfit <- list(aicc=Arima_Seasons1_2$aicc, i=i, j=j, Arima_Seasons1_2=Arima_Seasons1_2)
+    }
+  }
+}
+bestfit
+
+fc_Arima_Seasons1_2 <- forecast(bestfit$Arima_Seasons1_2, h=len_dec+len_inv,
+               xreg=cbind(
+                 fourier(ts(training_log, frequency=season1), K=bestfit$i, h=len_dec+len_inv),
+                 fourier(ts(training_log, frequency=season2), K=bestfit$j, h=len_dec+len_inv)))
+                 
+autoplot(fc_Arima_Seasons1_2) +
+   xlab("Year") + ylab("Logged Quantity Sold of Kitchen Trash Bags")+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+cr_ARIMA_seasons1_2<-checkresiduals(fc_Arima_Seasons1_2) 
+
+c1k_prediction$Arima_Seasons1_2<-exp(fc_Arima_Seasons1_2$mean+(retrend_log-trend_log[1])+reseasonal_log)
+
+```
+
+# ARIMA single season
+This section uses grid to tune the K parameter to get the Fourier regressor
+
+```{r ARIMA single season}
+Arima_Fourier_AIC<-list(aicc=Inf)
+for(K in seq(25)) {
+  fit <- auto.arima(training_log, xreg=fourier(training_log, K=K),
+    seasonal=FALSE)
+  if(fit[["aicc"]] < Arima_Fourier_AIC[["aicc"]]) {
+    Arima_Fourier_AIC <- fit
+    bestK <- K
+  }
+}
+Arima_Fourier_AIC
+
+fc_Arima_Fourier_AIC <- forecast(Arima_Fourier_AIC,xreg=fourier(training_log, K=bestK, h=len_dec+len_inv))
+autoplot(fc_Arima_Fourier_AIC)+
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+cr_ARIMA_Fourier_AIC<-checkresiduals(fc_Arima_Fourier_AIC)
+
+c1k_prediction$Arima_Fourier_AIC<-exp(fc_Arima_Fourier_AIC$mean+(retrend_log-trend_log[1])+reseasonal_log)
+
+```
+
+# TBATS
+
+```{r TBATS}
+# Uses a combination of Fourier terms with an exponential smoothing state space model and a Box-Cox transformation. Seasonality is allowed to change slowly over time.
+# Raw_1
+# Feed Raw Data to this model [with seasonality, trend and outliers]
+fit_TBATS_Raw_1<- tbats(t_log, use.box.cox = NULL, use.trend = TRUE, use.damped.trend = NULL, seasonal.periods = 52, use.arma.errors = TRUE, biasadj = TRUE)
+
+
+fc_TBATS_Raw_1<- forecast(fit_TBATS_Raw_1, h=len_dec+len_inv, bootstrap = TRUE) 
+
+autoplot(fc_TBATS_Raw_1) +
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+checkresiduals(fc_TBATS_Raw_1)
+
+c1k_prediction$fc_TBATS_Raw_1<-exp(fc_TBATS_Raw_1$mean)
+
+# TBATS Model with top 3 seasonal periods 
+
+## Seasons 1 and 2
+fc_TBATS_Season1_2 <- forecast(tbats(t_log, use.box.cox = NULL, use.trend = NULL, use.damped.trend = NULL, seasonal.periods = c(season2,season1), use.arma.errors = TRUE, biasadj = TRUE), h=len_dec+len_inv, bootstrap = TRUE)
+autoplot(fc_TBATS_Season1_2)+
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+checkresiduals(fc_TBATS_Season1_2)
+c1k_prediction$fc_TBATS_Season1_2<-exp(fc_TBATS_Season1_2$mean)
+
+## Seasons 2 and 3
+fc_TBATS_Season2_3<- forecast(tbats(t_log, use.box.cox = NULL, use.trend = NULL, use.damped.trend = NULL, seasonal.periods = c(season2,season3), use.arma.errors = TRUE, biasadj = TRUE),h=len_dec+len_inv) 
+autoplot(fc_TBATS_Season2_3)+ xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+checkresiduals(fc_TBATS_Season2_3)
+
+c1k_prediction$fc_TBATS_Season2_3<-exp(fc_TBATS_Season2_3$mean)
+
+## Seasons 1 and 3
+fc_TBATS_Season1_3 <- forecast(tbats(t_log, use.box.cox = NULL, use.trend = NULL, use.damped.trend = NULL, seasonal.periods = c(season1,season3), use.arma.errors = TRUE, biasadj = TRUE), h=len_dec+len_inv, bootstrap = TRUE)
+autoplot(fc_TBATS_Season1_3)+
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   guides(colour=guide_legend(title="Validation Set")) 
+
+checkresiduals(fc_TBATS_Season1_3)
+c1k_prediction$fc_TBATS_Season1_3<-exp(fc_TBATS_Season1_3$mean)
+
+# really simple tbats
+fit_TBATS_NoSeason<- tbats(t_log)
+fc_TBATS_NoSeason<- forecast(fit_TBATS_NoSeason, h=len_dec+len_inv)
+
+autoplot(fc_TBATS_NoSeason)+
+   xlab("Year") + ylab(paste("Logged Quantity Sold of", item))+
+   ggtitle(paste("Forecast for Quantity Sold of", item, "\n", country, ": Club", club)) +
+   guides(colour=guide_legend(title="Validation Set")) 
+checkresiduals(fc_TBATS_NoSeason) 
+
+c1k_prediction$fc_TBATS_NoSeason<-exp(fc_TBATS_NoSeason$mean)
+```
+
+# Neural network
+
+```{r Neural Networks}
+#Neural Networks with detrneded and de-seasonalized data
+#NNAR(p,P,k)m -> p = lagged inputs, P = equivalent to ARIMA(p,0,0)(P,0,0)m, k = nods in the single hidden layer 
+fit_NN_1<- nnetar(training_log, lambda = "auto")
+fc_NN_1<- forecast(fit_NN_1, h=len_dec+len_inv)
+autoplot(fc_NN_1) + xlab("Year") + ylab(paste("Logged Quantity Sold of", item))
+   
+c1k_week_quantity_models<-performance_index_dtds(df_Actual = c1k_week_quantity_models, pred_name = "fc_NN_1", pred_value = fc_NN_1$mean)
+c1k_prediction$fc_NN_1<-exp(fc_NN_1$mean+(retrend_log-trend_log[1])+reseasonal_log)
+
+# neural network with raw data
+fit_NN_Raw<- nnetar(t_log, lambda = "auto")
+fc_NN_Raw<- forecast(fit_NN_Raw, h=len_dec+len_inv)
+autoplot(fc_NN_Raw) +
+  xlab("Year") + ylab("Logged Quantity Sold of Kitchen Trash Bags")
+c1k_prediction$fc_NN_Raw<-exp(fc_NN_Raw$mean)
+```
+
+# Machine learning setup
+
+```{r Machine Learning setup}
+# feature engineering
+c1k_week$month<-month(c1k_week$TransactionTime)
+c1k_week$month<-as.factor(c1k_week$month)
+c1k_week$log1p_transaction_avrg<-log1p(c1k_week$transaction_avrg) #
+c1k_week$log1p_members_avrg<-log1p(c1k_week$members_avrg) #
+c1k_week$log1p_sales_local_avrg<-log1p(c1k_week$sales_local_avrg) #
+c1k_week$log1p_sales_usd_avrg<-log1p(c1k_week$sales_usd_avrg) #
+c1k_week$log1p_category_sales_local_avrg<-log1p(c1k_week$category_sales_local_avrg) #
+c1k_week$log1p_quantity_avrg<-log1p(c1k_week$quantity_avrg) #
+c1k_week$log1p_category_sales_local_avrg<- log1p(c1k_week$category_sales_local_avrg)
+c1k_week$log1p_category_sales_usd_avrg<-log1p(c1k_week$category_sales_usd_avrg)
+c1k_week$log1p_category_quantity_avrg<- log1p(c1k_week$category_quantity_avrg)
+c1k_week$log1p_salePrice_local_avrg<- log1p(c1k_week$salePrice_local_avrg)
+c1k_week$log1p_salePrice_usd_avrg<- log1p(c1k_week$salePrice_usd_avrg)
+c1k_week_prediction<-data.frame(matrix(nrow=len_dec+len_inv, ncol = ncol(c1k_week)))
+colnames(c1k_week_prediction)<-colnames(c1k_week)
+c1k_week_prediction$TransactionTime<-c1k_prediction$TransactionTime
+c1k_week_prediction$week_number<-c1k_week_prediction$TransactionTime%>%date2ISOweek()%>%substr(7,8)
+c1k_week_prediction$week_number_year<-c1k_week_prediction$TransactionTime%>%date2ISOweek()%>%substr(1,4)
+c1k_week_prediction$month<-month(c1k_week_prediction$TransactionTime)
+
+t_v_c1k<-rbind(as.data.frame(c1k_week), c1k_week_prediction)
+t_v_c1k<- t_v_c1k[order(t_v_c1k$TransactionTime),]%>%ungroup()
+t_v_c1k<- feature_engineering(t_v_c1k, c("quantity_avrg", "transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg","salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg","log1p_category_sales_local_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg"))
+# creating training matrix
+t_v_c1k<- fastDummies::dummy_cols(t_v_c1k, select_columns = c("week_number_year", "week_number", "month"))
+t_v_c1k$month<-NULL
+t_v_c1k$week_number_year<-NULL
+t_v_c1k$week_number<-NULL
+
+train_c1k<-t_v_c1k[1:(nrow(t_v_c1k)-len_dec-len_inv),]
+test_c1k<-t_v_c1k[(nrow(t_v_c1k)-len_dec-len_inv+1):nrow(t_v_c1k),]
+
+```
+
+# XGB model
+
+```{r XGB MODEL}
+trainc1k_XGB<-train_c1k%>%select(-c("transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg","salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg", "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg","TransactionTime"))
+testc1k_XGB<-test_c1k%>%select(-c("transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg","salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg", "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg","TransactionTime"))
+testc1k_XGB$quantity_avrg<-0
+
+trainTask <- makeRegrTask(data = trainc1k_XGB, target = "quantity_avrg")
+testTask <- makeRegrTask(data = testc1k_XGB, target = "quantity_avrg")
+
+xgb_learner <- makeLearner(
+  "regr.xgboost",
+  predict.type = "response",
+  par.vals = list(
+    objective = "reg:squarederror",
+    eval_metric = "rmse",
+    nrounds = 200
+  )
+)
+
+# Create a model
+xgb_model <- mlr::train(xgb_learner, task = trainTask)
+
+xgb_params <- makeParamSet(
+  # The number of trees in the model (each one built sequentially)
+  makeIntegerParam("nrounds", lower = 100, upper = 500),
+  # number of splits in each tree
+  makeIntegerParam("max_depth", lower = 1, upper = 10),
+  # "shrinkage" - prevents overfitting
+  makeNumericParam("eta", lower = .1, upper = .5),
+  # L2 regularization - prevents overfitting
+  makeNumericParam("lambda", lower = -1, upper = 0, trafo = function(x) 10^x)
+)
+control <- makeTuneControlRandom(maxit = 1)
+resample_desc <- makeResampleDesc("CV", iters = 10)
+tuned_params <- tuneParams(
+  learner = xgb_learner,
+  task = trainTask,
+  resampling = resample_desc,
+  par.set = xgb_params,
+  control = control
+)
+xgb_tuned_learner <- setHyperPars(
+  learner = xgb_learner,
+  par.vals = tuned_params$x
+)
+xgb_model <- mlr::train(xgb_tuned_learner, trainTask)
+XGBoost_pred <- predict(xgb_model ,testTask)
+
+
+c1k_week_quantity_models<-performance_index_raw(df_Actual = c1k_week_quantity_models, pred_name = "XGBoost", pred_value = log(XGBoost_pred$data$response))
+c1k_prediction$XGBoost<-log(XGBoost_pred$data$response)
+
+```
+
+# Random Forest 1
+
+```{r Random Forest 1, fig.width=12}
+#  RF1
+trainc1k_RF<-train_c1k%>%select(-c("transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg","salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg", "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg","TransactionTime"))
+testc1k_RF<-test_c1k%>%select(-c("transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg","salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg", "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg","TransactionTime"))
+
+RF_1 <- randomForest(quantity_avrg ~. , data = trainc1k_RF,
+                     ntree = 1000, mtry = 3, nodesize = 5, importance = TRUE, na.action = na.omit)
+
+varImpPlot(RF_1, main = "Variable importance")
+
+RF1_pred<-predict(RF_1, testc1k_RF)
+c1k_prediction$RF_1<-RF1_pred
+
+```
+
+# Random Forest 2
+
+```{r Random Forest 2}
+# RF2
+#Defining the Control
+trControl<- trainControl(method = "cv", number = 10, search = "grid")
+metric <- "RMSE"
+seed<- set.seed(156230)
+```
+
+## Step 1 Run a Default model
+
+```{r Random Forest 2 (1)}
+rf_default<- caret::train(quantity_avrg~ .
+                          , data = trainc1k_RF
+                          , method = "rf", metric = "RMSE", trControl = trControl, na.action=na.exclude)
+rf_default
+#RMSE was used to select the optimal model using the smallest value.
+```
+
+## Step 2 Search best mtry
+
+```{r Random Forest 2 (2)}
+#mtry is the number of variables available for splitting at each tree node
+tuneGrid<- expand.grid(.mtry = seq(1, 60, by=5))
+rf_mtry<- caret::train(quantity_avrg ~ ., 
+                       data = trainc1k_RF, 
+                       method = "rf", metric = "RMSE", tuneGrid = tuneGrid, trControl = trControl, importance = TRUE, na.action=na.exclude)
+rf_mtry
+#RMSE was used to select the optimal model using the smallest value.
+best_mtry<- rf_mtry$bestTune$mtry #store the best value for mtry
+min(rf_mtry$results$RMSE)
+```
+
+## Step 3 Search Best Maxnodes
+
+```{r Random Forest 2 (3)}
+store_maxnode<- list()  # create a list to find the optimal max of nodes
+tuneGrid<- expand.grid(.mtry= best_mtry)
+for (maxnodes in c(1, 2, 3, 4, 5, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70)){
+  set.seed(156230)
+  rf_maxnode<- caret::train(quantity_avrg ~ ., 
+                            data = trainc1k_RF, 
+                            method = "rf", metric = "RMSE", tuneGrid = tuneGrid, trControl = trControl, importance = TRUE, maxnodes = maxnodes, nodesize = 4, na.action = na.exclude)
+  current_iteration<- toString(maxnodes)
+  store_maxnode[[current_iteration]]<- rf_maxnode
+}
+
+results_node<- resamples(store_maxnode)
+results_node<-summary(results_node)
+nnode_optimal<-results_node$models[results_node$statistics$RMSE%>%as.data.frame()%>%select("Mean")%>%as.matrix()%>%as.numeric()%>%which.min()]%>%as.numeric()
+```
+
+## Step 4 Search the best ntrees
+
+```{r Random Forest 2 (4)}
+store_maxtrees <- list()
+for (ntree in c(10, 20, 30, 40, 50, 100 , 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700)) {
+  set.seed(156230)
+  rf_maxtrees <- caret::train(quantity_avrg ~ ., 
+                              data = trainc1k_RF,
+                              method = "rf",
+                              metric = "RMSE",
+                              tuneGrid = tuneGrid,
+                              trControl = trControl,
+                              importance = TRUE,
+                              maxnodes = nnode_optimal,
+                              ntree = ntree,
+                              na.action = na.exclude)
+  key <- toString(ntree)
+  store_maxtrees[[key]] <- rf_maxtrees
+}
+results_tree <- resamples(store_maxtrees)
+results_tree<-summary(results_tree)
+ntrees_optimal<-results_tree$models[results_tree$statistics$RMSE%>%as.data.frame()%>%select("Mean")%>%as.matrix()%>%as.numeric()%>%which.min()]%>%as.numeric()
+```
+
+## Step 5 Run model with the best specifications found above
+
+```{r Random Forest 2 (5)}
+fit_rf<- caret::train(quantity_avrg ~ ., 
+                      data = trainc1k_RF,
+                      method = "rf",
+                      metric = "RMSE",
+                      tuneGrid = tuneGrid,
+                      trControl = trControl,
+                      importance = TRUE,
+                      maxnodes = nnode_optimal,
+                      ntree = ntrees_optimal,
+                      na.action = na.exclude)
+```
+
+## Step 6 Evaluate Model
+
+```{r Random Forest 2 (6)}
+pred_rf2<- predict(fit_rf,test_c1k, predict.all = TRUE)
+c1k_prediction$RF_2<-c(pred_rf2, rep(NA, len_dec+len_inv-length(pred_rf2)))
+```
+
+# Random Forest 3
+
+```{r Random Forest 3, fig.width=12}
+RF_3<- randomForest(quantity_avrg ~ ., 
+                   data = trainc1k_RF,
+        mtry = best_mtry,
+        importance = TRUE,
+        maxnodes = nnode_optimal,
+        ntree = ntrees_optimal,
+        na.action = na.exclude)
+ 
+varImpPlot(RF_3)
+pred_rf3 <- predict(RF_3, test_c1k)
+pred_rf3<- data.table(Predicted_Quantity = pred_rf3, TransactionTime = test_c1k$TransactionTime)
+
+ggplot() +
+ geom_line(pred_rf3, mapping = aes(TransactionTime, Predicted_Quantity,color = "Predicted Quantity"))+
+ labs(x = "Time", y = "Quantity", title = "Random Forest forecasts")  +
+ scale_color_manual(values = c("Predicted Quantity" = 'darkblue', "Actual Quantity" = 'red')) 
+
+c1k_prediction$RF_3<-c(pred_rf3$Predicted_Quantity, rep(NA, len_dec+len_inv-length(pred_rf3$Predicted_Quantity)))
+
+```
+
+# Linear regression: Ridge, Random Forest and elastic
+
+```{r Linear Regression}
+train_c1k_GLMNET<-drop_na(train_c1k%>%select(-c("transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg", "salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg",  "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg", "log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg", "TransactionTime")))
+test_c1k_GLMNET<-drop_na(test_c1k%>%select(-c("quantity_avrg", "transaction_avrg", "members_avrg", "sales_local_avrg", "exchange_rate_avrg", "sales_usd_avrg", "category_sales_local_avrg", "category_sales_usd_avrg", "category_quantity_avrg", "salePrice_local_avrg","salePrice_usd_avrg", "log1p_quantity_avrg", "log1p_transaction_avrg", "log1p_members_avrg", "log1p_sales_local_avrg", "log1p_sales_usd_avrg", "log1p_category_sales_local_avrg","log1p_category_sales_usd_avrg", "log1p_category_quantity_avrg","log1p_salePrice_local_avrg","log1p_salePrice_usd_avrg", "TransactionTime")))
+
+y_train<- data.matrix(train_c1k_GLMNET["quantity_avrg"])
+x_train<-data.matrix(subset(train_c1k_GLMNET, select=-c(quantity_avrg)))
+
+x_test<-data.matrix(test_c1k_GLMNET)
+```
+
+## Ridge
+
+```{r Ridge}
+ridge <- glmnet(x_train,y_train,alpha = 0)
+
+plot(ridge, xvar = "lambda")
+
+ridge$lambda %>% head()
+#Tuning to find the right value for lamda 
+ridge_cv <- cv.glmnet(x_train,y_train,alpha = 0)
+plot(ridge_cv)
+# as we constrain our coefficients with log ( λ ) ≥ 0 penalty, the MSE rises considerably. The numbers at the top of the plot (38) just refer to the number of variables in the model. Ridge regression does not force any variables to exactly zero so all features will remain in the model 
+
+#The first and second vertical dashed lines represent the λ value with the minimum MSE and the largest  λ value within one standard error of the minimum MSE. 
+#extract our minimum and one standard error MSE and λ values
+min(ridge_cv$cvm) #minimum MSE
+ridge_cv$lambda.min #lambda for this minimum MSE
+
+ridge_cv$cvm[ridge_cv$lambda == ridge_cv$lambda.1se]  # 1 st.error of min MSE
+ridge_cv$lambda.1se  # lambda for this MSE
+
+ridge_min <- glmnet(x_train,y_train, alpha = 0)
+plot(ridge_min, xvar = "lambda")
+abline(v = log(ridge_cv$lambda.1se), col = "red", lty = "dashed")
+
+#Most Influential Feautures to predict accuracy
+coef(ridge_cv, s = "lambda.1se") %>%
+  tidy() %>%
+  filter(row != "(Intercept)") %>%
+  top_n(10, wt = abs(value)) %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Influential variables") +
+  xlab("Coefficient") +
+  ylab(NULL)
+
+min(ridge_cv$cvm)
+#Ridge model will retian all variables. Therefore, a ridge model is good only if we beleve that we need to retain all features in the model yet reduce the noise that less influential variable smay create and minimize collinearity. Ridge doesn't perform feature selection 
+##PREDICTING
+ridge_pred<- predict(ridge_cv, s=ridge_cv$lambda.1se, x_test, type = "response")
+ridge_pred_train<-predict(ridge_cv, s=ridge_cv$lambda.1se, x_train, type = "response")
+ridge_pred_train<-merge(data.frame(week=1:nrow(train_c1k)), data.frame(week=ridge_pred_train%>%rownames()%>%as.numeric(), pred=ridge_pred_train), all.x = TRUE)
+colnames(ridge_pred_train)<-c("week", "pred")
+#Graph
+pred_ridge<- data.frame(Predicted_Quantity = ridge_pred, TransactionTime = test_c1k$TransactionTime[1:length(ridge_pred)])
+colnames(pred_ridge)<-c("Predicted_Quantity", "TransactionTime")
+ggplot() +
+ geom_line(pred_ridge, mapping = aes(TransactionTime, Predicted_Quantity, color = "Predicted Quantity"))+
+ labs(x = "Time", y = "Quantity", title = "Ridge") + scale_color_manual(values = c("Predicted Quantity" = 'darkblue', "Actual Quantity" = 'red')) 
+c1k_prediction$Ridge<-c(pred_ridge$Predicted_Quantity, rep(NA, len_dec+len_inv-length(pred_ridge$Predicted_Quantity)))
+```
+
+## Lasso
+
+```{r Lasso}
+lasso <- glmnet(x_train,y_train,alpha = 1)
+
+plot(lasso, xvar = "lambda")
+# when log(λ)=− 3 all 8 variables are in the model, when log(λ)=−1 2 variables are retained
+ 
+#Tuning to find the right value for lamda 
+lasso_cv <- cv.glmnet(x_train,y_train,alpha = 1)
+plot(lasso_cv) 
+
+#extract our minimum and one standard error MSE and λ values
+min(lasso_cv$cvm) #minimum MSE
+lasso_cv$lambda.min #lambda for this minimum MSE
+
+lasso_cv$cvm[lasso_cv$lambda == lasso_cv$lambda.1se]  # 1 st.error of min MSE
+lasso_cv$lambda.1se  # lambda for this MSE
+
+lasso_min <- glmnet(x_train,y_train, alpha = 1)
+plot(lasso_min, xvar = "lambda")
+abline(v = log(lasso_cv$lambda.min), col = "red", lty = "dashed")
+abline(v = log(lasso_cv$lambda.1se), col = "red", lty = "dashed")
+
+#Most Influential Feautures to predict accuracy
+coef(lasso_cv, s = "lambda.1se") %>%
+  tidy() %>%
+  filter(row != "(Intercept)") %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Influential variables") +
+  xlab("Coefficient") +
+  ylab(NULL) 
+
+##Predicting
+lasso_pred<- predict(lasso_cv, s=lasso_cv$lambda.min, x_test, type = "response")
+c1k_prediction$Lasso<-c(lasso_pred, rep(NA, len_dec+len_inv-length(lasso_pred)))
+
+```
+
+## Elstic Net
+
+```{r Elastic Net}
+
+#Tune λ and the alpha parameters.
+# maintain the same folds across all models
+fold_id <- sample(1:10, size = length(y_train), replace=TRUE)
+
+# search across a range of alphas
+tuning_grid <- tibble::tibble(
+  alpha      = seq(0, 1, by = .1),
+  mse_min    = NA,
+  mse_1se    = NA,
+  lambda_min = NA,
+  lambda_1se = NA
+)
+
+#Now we can iterate over each alpha value, apply a CV elastic net, and extract the minimum and one standard error MSE values and their respective λ values.
+for(i in seq_along(tuning_grid$alpha)) {
+  
+  # fit CV model for each alpha value
+  fit <- cv.glmnet(x_train, y_train, alpha = tuning_grid$alpha[i], foldid = fold_id)
+  
+  # extract MSE and lambda values
+  tuning_grid$mse_min[i]    <- fit$cvm[fit$lambda == fit$lambda.min]
+  tuning_grid$mse_1se[i]    <- fit$cvm[fit$lambda == fit$lambda.1se]
+  tuning_grid$lambda_min[i] <- fit$lambda.min
+  tuning_grid$lambda_1se[i] <- fit$lambda.1se
+}
+
+tuning_grid
+
+#plot the MSE 
+elastic_tuning<-tuning_grid %>%mutate(se = mse_1se - mse_min)
+
+elastic_tuning%>%
+  ggplot(aes(alpha, mse_min)) +
+  geom_line(size = 2) +
+  geom_ribbon(aes(ymax = mse_min + se, ymin = mse_min - se), alpha = .25) +
+  ggtitle("MSE ± one standard error")
+
+alpha_optimal<-(elastic_tuning%>%as.data.frame()%>%select("alpha"))[which.min(elastic_tuning%>%as.data.frame()%>%select("mse_1se")%>%unlist()%>%as.numeric()),1]
+#advantage of the elastic net model is that it enables effective regularization via the ridge penalty with the feature selection characteristics of the lasso penalty
+
+elastic_cv<-cv.glmnet(x_train,y_train,alpha = alpha_optimal)
+
+elastic_pred<- predict(elastic_cv, s=elastic_cv$lambda.1se, x_test, type = "response")
+c1k_prediction$elastic<-c(elastic_pred, rep(NA, len_dec+len_inv-length(lasso_pred)))
+
+```
+
+# Final prediction
+
+```{r Final prediction}
+c1k_prediction$quantity_avrg<-rowMeans(c1k_prediction%>%select(best_two_total_ml[1],
+                                                               best_two_total_ml[2],
+                                                               best_two_total[1],
+                                                               best_two_total[2]))
+c1k_prediction$week_begin<-c1k_prediction$TransactionTime-2
+c1k_prediction$week_end<-c1k_prediction$TransactionTime+4
+```
+
+# Benchmark model 1: HoltWinter Smoothing
+
+```{r HW Smoothing}
+t_log_HW<- ts(log(c1k_week$quantity_avrg), frequency = 52)
+expsmo<-HoltWinters(t_log_HW, seasonal = "additive")
+pred_HW<-predict(expsmo, n.ahead = len_dec+len_inv)
+c1k_prediction$HW<-exp(c(pred_HW%>%as.numeric(), rep(NA, len_dec+len_inv-length(pred_HW)))+(retrend_log-trend_log[1])+reseasonal_log)
+```
+
+# Benchmark model 2: Annual Growth
+
+```{r Annual Growth}
+annual_growth_last<-t_log_HW[length(t_log_HW)]/lag(t_log_HW%>%as.numeric(), n = 52)[length(t_log_HW)]
+pred_AG<-c(c1k_week$quantity_avrg, rep(NA, len_dec+len_inv))
+pred_AG_lag52<-lag(pred_AG%>%as.numeric(), n = 52)%>%tail(len_dec+len_inv)
+c1k_prediction$AG<-pred_AG_lag52*annual_growth_last
+```
+
+# Output
+
+```{r Output}
+# Spreadsheet
+write.csv(c1k_prediction%>%select("quantity_avrg", "week_begin", "week_end", "HW", "AG"), "Output/Countries/Colombia/pred_c1k.csv")
+# Grphs
+test_history<-ts(c1k_week$quantity_avrg, frequency = 52.14, start = c(c1k_week$week_number_year[1], c1k_week$week_number[1]))  
+c1k_prediction$week_number<-c1k_prediction$TransactionTime%>%date2ISOweek()%>%substr(7,8)%>%as.numeric()
+c1k_prediction$week_number_year<-c1k_prediction$TransactionTime%>%date2ISOweek()%>%substr(1,4)%>%as.numeric()
+test_pred<-ts(c1k_prediction$quantity_avrg, frequency = 52.14, start = c(c1k_prediction$week_number_year[1], c1k_prediction$week_number[1])) 
+test_HW<-ts(c1k_prediction$HW, frequency = 52.14, start = c(c1k_prediction$week_number_year[1], c1k_prediction$week_number[1])) 
+test_AG<-ts(c1k_prediction$AG, frequency = 52.14, start = c(c1k_prediction$week_number_year[1], c1k_prediction$week_number[1])) 
+autoplot(test_history)+autolayer(test_pred)+autolayer(test_HW)+autolayer(test_AG)+ggtitle("Predictions: Model and Benchmark, 6101")
+save.image(paste0("Output/Countries/Colombia/", club, "test.RData"))
+```

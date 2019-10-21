@@ -3,8 +3,7 @@ title: "Untitled"
 author: "Mark"
 date: "2019/10/20"
 output: html_document
-params: 
-  output_dir: "../doc"
+
 ---
 
 ```{r setup, include=FALSE}

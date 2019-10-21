@@ -1,0 +1,288 @@
+---
+title: "Model training"
+author: "Mark Wang & Paola Aleman"
+date: "9/30/2019"
+output: html_document
+editor_options:
+  chunk_Output_type: console
+---
+
+# Instructions
+
+For the following code to run smoothly it is necessary to have the folders that the line of code calls for.  
+The main folder is called Forecast, which holds all R-markdowns. The subfolders for the Forecast folder are: Code, Data, Output. The subfolder Code holds scripts.  
+The subfolder Data holds two more subfolders: Countries, Raw Data. The Countries subfolder [this is an optional subfolder] includes folders for each country to which we individually want to save data on. Raw Data folder only has the raw data on it.  
+The subfolder Output includes a subfolder called Countries and this folder has folders for each country. Each country then has 2 additional folders: Plots, Tables.  
+The Plots folder saves all graphs created in the script.   
+The Tables folder saves all excel files with the performance indices.   
+Note the models are label by c 1 k. which stands for c -> colombia, 1 -> club 6101 and k -> kitchen trash bags.  
+It is necessary to change c 1 k whenever you're analyzing a different set of item and club. This way graphs and models are saved into folders with their specific name.  
+For easier substitution ctrl+f. In the first box type the name you want to substitute, such as c 1 k. and on the second box include the prefix you want to substitute with, suck as c 2 k. Then click the last All option.  
+
+# Setup
+
+```{r setup, include=FALSE, results='hide'}
+Sys.setenv(LANG = "en")
+Sys.setlocale("LC_TIME", "English") 
+knitr::opts_knit$set(root.dir = normalizePath("C:/Users/kangyuwang/OneDrive/Price Smart/Forecast"))
+setwd("C:/Users/kangyuwang/OneDrive/Price Smart/Forecast")
+getwd()  
+
+# The following parameters should be set to reflect the purchasing strategy of Pricemart that are different across different items and clubs. The parameters are in week terms.
+
+len_dec<-1  #The frequency in which buyers make purchase decisions 
+
+len_inv<-17 #The time span from purchase to selling of an item 
+
+#Item, club and country we are analyzing 
+item <- "Kitchen Trash Bag"
+club <- 6101
+country <- "Colombia"
+
+```
+
+# Installing packages
+
+```{r Installing packages, include=FALSE, results = 'hide'}  
+# Install the packages just once. Afterwards you only need to load the libraries
+source("Code/Install Packages.R")
+
+``` 
+
+# Define functions: 
+Three functions are defined in this section. firstly, performance_index_dtds function calculates the performance of prediction models on de-trended and de-seasonalized quantity data. Secondly, performance_index_raw function calculates the performance of prediction models on raw data. Thirdly, feature_engineering function performs feature engineering to prepare for machine learning data. 
+
+```{r performance index function}
+
+# This scripts stores performance_index function
+
+performance_index_dtds<-function(df_Actual, pred_name, pred_value){
+   assign(pred_name, exp(pred_value+(retrend_log-trend_log[1])+reseasonal_log))
+   df_Actual[,colnames(df_Actual)==pred_name]<-NULL
+   df_Actual<-cbind(df_Actual, get(pred_name)%>%as.numeric())
+   colnames(df_Actual)[colnames(df_Actual)=="get(pred_name) %>% as.numeric()"]<-pred_name
+   assign(paste0("MEAN_", pred_name, "_total"), 
+         mean(get(pred_name))/df_Actual%>%select("Actual")%>%data.matrix()%>%mean()-1,
+         envir = .GlobalEnv
+         )
+   assign(paste0("MEAN_", pred_name, "_target"),
+         mean((get(pred_name))[(len_inv+1):(len_inv+len_dec)])/mean((df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)])-1,
+         envir=.GlobalEnv
+         )
+  
+   assign(paste0("RMSE_", pred_name, "_total" ),
+         RMSE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("RMSE_", pred_name, "_target" ),
+         RMSE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+    
+   assign(paste0("RMSE_", pred_name, "_total" ),
+         RMSE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("RMSE_", pred_name, "_target" ),
+         RMSE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+   
+   assign(paste0("MAE_", pred_name, "_total" ),
+         MAE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MAE_", pred_name, "_target" ),
+         MAE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  
+   assign(paste0("MPE_", pred_name, "_total" ),
+         MPE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MPE_", pred_name, "_target" ),
+         MPE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+   
+   assign(paste0("MAPE_", pred_name, "_total" ),
+         MAPE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MAPE_", pred_name, "_target" ),
+         MAPE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  
+   assign(paste0("MASE_", pred_name, "_total" ),
+         mase(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MASE_", pred_name, "_target" ),
+         mase((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  return(df_Actual)
+}
+
+performance_index_raw<-function(df_Actual, pred_name, pred_value){
+   assign(pred_name, exp(pred_value))
+   df_Actual[,colnames(df_Actual)==pred_name]<-NULL
+   df_Actual<-cbind(df_Actual, get(pred_name)%>%as.numeric())
+   colnames(df_Actual)[colnames(df_Actual)=="get(pred_name) %>% as.numeric()"]<-pred_name
+   assign(paste0("MEAN_", pred_name, "_total"), 
+         mean(get(pred_name))/df_Actual%>%select("Actual")%>%data.matrix()%>%mean()-1,
+         envir = .GlobalEnv
+         )
+   assign(paste0("MEAN_", pred_name, "_target"),
+         mean((get(pred_name))[(len_inv+1):(len_inv+len_dec)])/mean((df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)])-1,
+         envir=.GlobalEnv
+         )
+  
+   assign(paste0("RMSE_", pred_name, "_total" ),
+         RMSE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("RMSE_", pred_name, "_target" ),
+         RMSE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  
+      assign(paste0("MAE_", pred_name, "_total" ),
+         MAE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MAE_", pred_name, "_target" ),
+         MAE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+   
+   assign(paste0("MPE_", pred_name, "_total" ),
+         MPE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MPE_", pred_name, "_target" ),
+         MPE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  
+   assign(paste0("MAPE_", pred_name, "_total" ),
+         MAPE(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MAPE_", pred_name, "_target" ),
+         MAPE((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  
+   assign(paste0("MASE_", pred_name, "_total" ),
+         mase(get(pred_name),df_Actual%>%select("Actual")%>%data.matrix()),
+         envir = .GlobalEnv)
+   assign(paste0("MASE_", pred_name, "_target" ),
+         mase((get(pred_name)[(len_inv+1):(len_inv+len_dec)]),(df_Actual%>%select("Actual")%>%data.matrix())[(len_inv+1):(len_inv+len_dec)]),
+         envir = .GlobalEnv)
+  return(df_Actual)
+}
+feature_engineering<-function(t_v, feature_list){
+  function_names<-c("avg" , "diff")
+  function_list<-list(function(x) roll_meanr(x, n= 4), function(x) c(diff(x), NA))
+  weeks<-c(1, 4, 5, 8, 9, 12, 13, 17, 18, 22, 26, 52)
+  for (feature in feature_list){ 
+    for (lag_number in (weeks[weeks>=len_dec+len_inv])){
+      assign(paste0("lag", "_", lag_number, "_", feature), lag((t_v%>%select(feature))[[1]], lag_number))
+      t_v<-cbind(t_v, get(paste0("lag", "_", lag_number, "_", feature))%>%as.numeric())
+      colnames(t_v)[colnames(t_v)=="get(paste0(\"lag\", \"_\", lag_number, \"_\", feature)) %>% as.numeric()"]<-paste0("lag", "_", lag_number, "_", feature)
+      for (i in (1:length(function_names))){
+        assign(paste0(function_names[i], "_", lag_number, "_", feature), lag(function_list[[i]]((t_v%>%select(feature))[[1]]), lag_number))
+        t_v<-cbind(t_v, get(paste0(function_names[i], "_", lag_number, "_", feature))%>%as.numeric())
+        colnames(t_v)[colnames(t_v)=="get(paste0(function_names[i], \"_\", lag_number, \"_\", feature)) %>% "]<-paste0(function_names[i], "_", lag_number, "_", feature)
+      }
+    }
+  }
+  return(t_v)
+}
+```
+
+# Importing Training Dataset
+
+```{r importing}   
+train<-read_xlsx("Data/Book1.xlsx")
+head(train, 10)
+```
+
+## Dealing with Variables
+
+```{r dealing with variables, include=FALSE, results='hide'}
+##Changing "TransactionDate" from integer to date 
+train$sales_usd<-train$salesusd
+train$sales_local<-train$sales
+train$TransactionDate<- as.Date(train$TransactionDate%>%as.character(), "%Y%m%d")
+train$TransactionDate<- ymd(train$TransactionDate)
+##Changing "Club Number" from integer to Factor 
+train$ClubNumber<- as.factor(train$ClubNumber)
+country_set<-train
+##Changing Month into Factor
+country_set$month<-as.factor(strftime(country_set$TransactionDate, "%B"))
+#ClubNumber into Factor
+country_set$ClubNumber<- as.factor(country_set$ClubNumber)
+##Day of week
+country_set$Day_of_week <- as.factor(strftime(country_set$TransactionDate, "%A"))
+#Create Dummy Variables for month and weekday
+country_set<- cbind(country_set, fastDummies::dummy_cols(country_set$month))
+country_set<- cbind(country_set, fastDummies::dummy_cols(country_set$Day_of_week))
+
+#Take out unnecessary variables
+country_set$.data<- NULL
+country_set$.data<- NULL
+country_set$Year<- NULL
+country_set$.data_February<- NULL
+country_set$.data_Monday <- NULL
+
+#Rename Month Dummy Variables 
+colnames(country_set)[colnames(country_set)==".data_January"] <- "Jan"
+colnames(country_set)[colnames(country_set)==".data_March"] <- "Mar"
+colnames(country_set)[colnames(country_set)==".data_April"] <- "Apr"
+colnames(country_set)[colnames(country_set)==".data_May"] <- "May"
+colnames(country_set)[colnames(country_set)==".data_June"] <- "June"
+colnames(country_set)[colnames(country_set)==".data_July"] <- "July"
+colnames(country_set)[colnames(country_set)==".data_August"] <- "Aug"
+colnames(country_set)[colnames(country_set)==".data_September"] <- "Sep"
+colnames(country_set)[colnames(country_set)==".data_October"] <- "Oct"
+colnames(country_set)[colnames(country_set)==".data_November"] <- "Nov"
+colnames(country_set)[colnames(country_set)==".data_December"] <- "Dec"
+
+#Rename Weekday dummy variables
+colnames(country_set)[colnames(country_set)==".data_Tuesday"] <- "Tu"
+colnames(country_set)[colnames(country_set)==".data_Thursday"] <- "Th"
+colnames(country_set)[colnames(country_set)==".data_Wednesday"] <- "Wed"
+colnames(country_set)[colnames(country_set)==".data_Friday"] <- "Fri"
+colnames(country_set)[colnames(country_set)==".data_Saturday"] <- "Sat"
+colnames(country_set)[colnames(country_set)==".data_Sunday"] <- "Sun"
+
+#Subsetting
+c1k<-country_set[country_set$ClubNumber==club,]
+
+c1k<-c1k[order(c1k$TransactionDate),]
+
+c1k$TransactionDate<- as.Date(c1k$TransactionDate)
+
+#Drop unnecessary variables
+c1k$ClubNumber<-NULL
+c1k$Country<-NULL
+c1k$item<-NULL
+c1k$Description<-NULL
+c1k$Day_of_month<-NULL
+c1k$month<- NULL
+c1k$weekday<- NULL
+c1k$Day_of_week<- NULL
+c1k$Year<- NULL
+c1k$sales<-NULL
+c1k$salesusd<-NULL
+```
+
+# Summary statistics
+
+```{r summary statistics}
+# c1k contains data of the item and club that we want to analyze
+head(c1k, 10)
+# Time span
+## Beginning and Ending of dataset
+summary(c1k$TransactionDate)
+## Gaps
+c(min(c1k$TransactionDate):max(c1k$TransactionDate))[c(min(c1k$TransactionDate):max(c1k$TransactionDate))%in%c1k$TransactionDate==FALSE]%>%as.Date(origin="1970-1-1")
+
+c1k_quant_dist<-c(c1k$quantity, rep(0, sum(c(min(c1k$TransactionDate):max(c1k$TransactionDate))%in%c1k$TransactionDate==FALSE)))
+hist(c1k_quant_dist, breaks = 20)
+
+c1k$SalePrice_local<- c1k$sales_local/c1k$quantity
+c1k$SalePrice_usd<- c1k$sales_usd/c1k$quantity
+# Trends and cycles
+## Price in local curency increased and then stabalized 
+ggplot(data=c1k, aes(x=TransactionDate, y=SalePrice_local))+geom_line()
+## Price in USD fluctuated and then stabalized
+ggplot(data=c1k, aes(x=TransactionDate, y=SalePrice_usd))+geom_line()
+## Quantity gradually dropped
+ggplot(data=c1k, aes(x=TransactionDate, y=quantity))+geom_line()
+
+```
