@@ -412,7 +412,6 @@ plot(detrend_ts_log)
 # Training and Validation Set: uni-variate methods
 
 ```{r training and validation Set}  
-
 training_log<-ts(detrend_ts_log[1:(nrow(c1k_week)-len_inv-len_dec)], frequency = 52.14, start = c(c1k_week$week_number_year[1], c1k_week$week_number[1])) 
 
 # future trend and seasonality, which will be added back:
@@ -427,7 +426,6 @@ reseasonal_log<-forecast(decompose_log$time.series[,1], len_inv+len_dec)$mean
 validation_log<-ts(log(c1k_week$quantity_avrg)[(nrow(c1k_week)-len_inv-len_dec+1):nrow(c1k_week)], frequency = 52.14, end = c(c1k_week$week_number_year[length(c1k_week$week_number_year)], c1k_week$week_number[length(c1k_week$week_number_year)]))
 
 validation<-ts(c1k_week$quantity_avrg[(nrow(c1k_week)-len_inv-len_dec+1):nrow(c1k_week)], frequency = 52.14, end = c(c1k_week$week_number_year[length(c1k_week$week_number_year)], c1k_week$week_number[length(c1k_week$week_number_year)]))
-
 ```
 
 # Visualization of Trend, season and random
@@ -498,8 +496,6 @@ Naive_Method<-naive(training_log, h = len_dec+len_inv)
 Seasonal_Naive_Method<-snaive(training_log, h = len_dec+len_inv) 
 #Drift Method
 Drift_Method<-rwf(training_log, h = len_dec+len_inv, drift = TRUE)
-
-
 
 autoplot(training_log) +
    autolayer(validation_log-(retrend_log-trend_log[1])-reseasonal_log, series="Validation")+
